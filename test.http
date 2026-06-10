@@ -1,0 +1,19 @@
+
+
+GET http://localhost:8080/health HTTP/2 (Prior Knowledge)
+Accept: application/json
+
+###
+
+GET http://localhost:8080/health
+Accept: application/json
+
+###
+
+GET http://localhost:8080/panic
+Accept: application/json
+
+###
+
+GET http://localhost:8080/
+Accept: application/json
