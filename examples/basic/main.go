@@ -86,7 +86,7 @@ func main() {
 	go func() {
 		slog.Info(fmt.Sprintf("Server listening on %s", srv.Addr))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("Server error: %v", err)
+			slog.Error(fmt.Sprintf("Server error: %s", err.Error()))
 			os.Exit(1)
 		}
 	}()
@@ -101,7 +101,7 @@ func main() {
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		slog.Error("Forced shutdown: %v", err)
+		slog.Error(fmt.Sprintf("Forced shutdown: %s", err.Error()))
 		os.Exit(1)
 	}
 	slog.Info("Server stopped")
