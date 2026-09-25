@@ -15,7 +15,9 @@ type RateLimitConfig struct {
 	Interval time.Duration
 
 	// KeyFunc extracts a key from the request to identify a client.
-	// Defaults to the remote IP address if nil.
+	// Defaults to ClientAddr if nil: the client IP resolved by ClientIP, or
+	// the connection's peer address without ClientIP. Behind a reverse proxy
+	// add ClientIP with the proxy trusted, or all clients share one limit.
 	KeyFunc func(r *http.Request) string
 }
 
@@ -94,17 +96,6 @@ func (l *limiter) cleanup() {
 	}
 }
 
-// remoteIP extracts the IP address from r.RemoteAddr, stripping the port.
-func remoteIP(r *http.Request) string {
-	addr := r.RemoteAddr
-	for i := len(addr) - 1; i >= 0; i-- {
-		if addr[i] == ':' {
-			return addr[:i]
-		}
-	}
-	return addr
-}
-
 // RateLimiter returns a Middleware that limits the number of requests per client
 // using a fixed window counter. Clients that exceed the limit receive 429 Too
 // Many Requests.
@@ -123,7 +114,7 @@ func RateLimiter(cfg RateLimitConfig) Middleware {
 		cfg.Interval = time.Minute
 	}
 	if cfg.KeyFunc == nil {
-		cfg.KeyFunc = remoteIP
+		cfg.KeyFunc = ClientAddr
 	}
 
 	l := newLimiter(cfg)

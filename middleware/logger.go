@@ -25,7 +25,9 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 }
 
 // Logger returns a Middleware that logs each request using the provided slog.Logger.
-// If the logger is nil, slog.Default() is used.
+// If the logger is nil, slog.Default() is used. remote_addr is the connection's
+// peer; client_ip is ClientAddr, which differs behind a trusted proxy when
+// ClientIP runs before Logger.
 func Logger(logger *slog.Logger) Middleware {
 	if logger == nil {
 		logger = slog.Default()
@@ -49,6 +51,7 @@ func Logger(logger *slog.Logger) Middleware {
 				slog.Int64("bytes", wrapped.written),
 				slog.Duration("duration", time.Since(start)),
 				slog.String("remote_addr", r.RemoteAddr),
+				slog.String("client_ip", ClientAddr(r)),
 			)
 		})
 	}
