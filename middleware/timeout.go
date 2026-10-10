@@ -3,6 +3,9 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"maps"
 	"net/http"
 	"sync"
 	"time"
@@ -16,6 +19,16 @@ import (
 // the context to downstream calls (database queries, HTTP clients, etc.) for
 // the timeout to take effect.
 //
+// The handler runs in its own goroutine and its response (headers, status and
+// body) is buffered until it returns, the same way as http.TimeoutHandler.
+// Streaming is therefore not supported: the writer passed to the handler does
+// not implement http.Flusher, http.Hijacker or Unwrap. A panic in the handler
+// is re-raised on the serving goroutine so outer middleware (e.g. Recoverer)
+// still sees it.
+//
+// If the request context is canceled because the client went away, only the
+// 503 status line is written (nobody is reading a body).
+//
 // Example — 5-second timeout per request:
 //
 //	middleware.Timeout(5 * time.Second)
@@ -27,34 +40,52 @@ func Timeout(timeout time.Duration) Middleware {
 
 			r = r.WithContext(ctx)
 
-			// done receives the signal that the handler finished normally.
+			// done is closed when the handler returns normally; panicCh
+			// receives the value if it panics instead.
 			done := make(chan struct{})
+			panicCh := make(chan any, 1)
 
-			// tw wraps w to guard against writing to the response after the
-			// timeout has fired, and we have already written 503.
-			tw := &timeoutWriter{ResponseWriter: w}
+			// tw buffers the handler's response. It has its own header map so
+			// the handler goroutine never touches w.Header(), which this
+			// goroutine writes to on timeout.
+			tw := &timeoutWriter{h: make(http.Header)}
 
 			go func() {
-				defer close(done)
+				defer func() {
+					if p := recover(); p != nil {
+						panicCh <- p
+					}
+				}()
 				next.ServeHTTP(tw, r)
+				close(done)
 			}()
 
 			select {
+			case p := <-panicCh:
+				panic(p)
+
 			case <-done:
-				// Handler finished in time — flush its response.
+				// Handler finished in time — copy its response to w.
 				tw.mu.Lock()
 				defer tw.mu.Unlock()
-				if !tw.timedOut {
-					w.WriteHeader(tw.code)
-					_, _ = w.Write(tw.buf.Bytes())
+				maps.Copy(w.Header(), tw.h)
+				if !tw.wroteHeader {
+					tw.code = http.StatusOK
 				}
+				w.WriteHeader(tw.code)
+				_, _ = w.Write(tw.buf.Bytes())
 
 			case <-ctx.Done():
 				tw.mu.Lock()
-				tw.timedOut = true
-				tw.mu.Unlock()
+				defer tw.mu.Unlock()
+				tw.err = ctx.Err()
 
-				http.Error(w, "request timeout", http.StatusServiceUnavailable)
+				if errors.Is(tw.err, context.DeadlineExceeded) {
+					http.Error(w, "request timeout", http.StatusServiceUnavailable)
+					return
+				}
+				// Client disconnected or the parent context was canceled.
+				w.WriteHeader(http.StatusServiceUnavailable)
 			}
 		})
 	}
@@ -63,19 +94,27 @@ func Timeout(timeout time.Duration) Middleware {
 // timeoutWriter buffers the handler's response so it can be discarded if the
 // deadline fires before the handler returns.
 type timeoutWriter struct {
-	http.ResponseWriter
+	h http.Header // owned by the handler goroutine until it returns
 
 	mu          sync.Mutex
 	buf         bytes.Buffer
 	code        int
-	timedOut    bool
+	err         error // non-nil once the context ended before the handler returned
 	wroteHeader bool
 }
 
+func (tw *timeoutWriter) Header() http.Header { return tw.h }
+
 func (tw *timeoutWriter) WriteHeader(code int) {
+	// Same check as net/http, but panicking here (in the handler goroutine)
+	// rather than later when the code is copied to the real writer.
+	if code < 100 || code > 999 {
+		panic(fmt.Sprintf("invalid WriteHeader code %v", code))
+	}
+
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
-	if tw.timedOut || tw.wroteHeader {
+	if tw.err != nil || tw.wroteHeader {
 		return
 	}
 	tw.code = code
@@ -85,8 +124,8 @@ func (tw *timeoutWriter) WriteHeader(code int) {
 func (tw *timeoutWriter) Write(b []byte) (int, error) {
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
-	if tw.timedOut {
-		return 0, context.DeadlineExceeded
+	if tw.err != nil {
+		return 0, tw.err
 	}
 	if !tw.wroteHeader {
 		tw.code = http.StatusOK
