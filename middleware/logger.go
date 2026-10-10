@@ -24,6 +24,12 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// Unwrap returns the wrapped writer, so http.NewResponseController can reach
+// its Flush, Hijack and deadline methods through Logger.
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}
+
 // Logger returns a Middleware that logs each request using the provided slog.Logger.
 // If the logger is nil, slog.Default() is used. remote_addr is the connection's
 // peer; client_ip is ClientAddr, which differs behind a trusted proxy when
