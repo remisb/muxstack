@@ -115,19 +115,39 @@ func TestTimeoutClientGone(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
 	time.AfterFunc(5*time.Millisecond, cancel)
 
-	rec := httptest.NewRecorder()
+	rec := &writeTracker{ResponseRecorder: httptest.NewRecorder()}
 	h.ServeHTTP(rec, req)
 	for i := 0; i < 100; i++ {
 		_ = rec.Header().Get("X-After")
 	}
 	<-finished
 
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("status = %d, want 503", rec.Code)
+	if rec.wroteHeader {
+		t.Errorf("WriteHeader(%d) called, want nothing written", rec.Code)
 	}
 	if rec.Body.Len() != 0 {
 		t.Errorf("body = %q, want empty", rec.Body.String())
 	}
+	if len(rec.Header()) != 0 {
+		t.Errorf("headers = %v, want none", rec.Header())
+	}
+}
+
+// writeTracker records whether WriteHeader was called, which
+// httptest.ResponseRecorder does not expose (its Code defaults to 200).
+type writeTracker struct {
+	*httptest.ResponseRecorder
+	wroteHeader bool
+}
+
+func (w *writeTracker) WriteHeader(code int) {
+	w.wroteHeader = true
+	w.ResponseRecorder.WriteHeader(code)
+}
+
+func (w *writeTracker) Write(b []byte) (int, error) {
+	w.wroteHeader = true
+	return w.ResponseRecorder.Write(b)
 }
 
 func TestTimeoutPanicPropagates(t *testing.T) {

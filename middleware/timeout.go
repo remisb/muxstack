@@ -26,8 +26,9 @@ import (
 // is re-raised on the serving goroutine so outer middleware (e.g. Recoverer)
 // still sees it.
 //
-// If the request context is canceled because the client went away, only the
-// 503 status line is written (nobody is reading a body).
+// If the request context is canceled instead (the client went away, or a
+// parent context was canceled), nothing is written: nobody is reading the
+// answer, and a 503 would count the request as a server error.
 //
 // Example — 5-second timeout per request:
 //
@@ -82,10 +83,9 @@ func Timeout(timeout time.Duration) Middleware {
 
 				if errors.Is(tw.err, context.DeadlineExceeded) {
 					http.Error(w, "request timeout", http.StatusServiceUnavailable)
-					return
 				}
-				// Client disconnected or the parent context was canceled.
-				w.WriteHeader(http.StatusServiceUnavailable)
+				// Otherwise the client disconnected or the parent context was
+				// canceled: write nothing.
 			}
 		})
 	}
